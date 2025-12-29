@@ -1,4 +1,2 @@
 streamlit>=1.30
 tzdata>=2024.1
-streamlit-cookies-manager>=0.2.0
-
