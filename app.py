@@ -7,7 +7,6 @@ from datetime import datetime, date
 from zoneinfo import ZoneInfo
 
 import streamlit as st
-from streamlit_cookies_manager import EncryptedCookieManager
 
 # =========================
 # KONFIG
@@ -21,14 +20,10 @@ st.set_page_config(
     initial_sidebar_state="collapsed",
 )
 
-# DB (produkcyjnie: najlepiej na persistent volume)
+# DB (na Streamlit Cloud trzymaj w katalogu projektu; jeśli środowisko nie persistuje, rozważ zewn. DB)
 DB_DIR = os.path.join(os.path.dirname(__file__), "data")
 os.makedirs(DB_DIR, exist_ok=True)
 DB_PATH = os.path.join(DB_DIR, "seduceme.db")
-
-# Cookies (USTAW MOCNE HASŁO w prod, najlepiej z env var)
-COOKIE_PASSWORD = os.environ.get("SEDUCEME_COOKIE_PASSWORD", "change-me-strong-password")
-cookies = EncryptedCookieManager(prefix="seduceme_", password=COOKIE_PASSWORD)
 
 # =========================
 # DANE (14 DNI)
@@ -180,7 +175,7 @@ DAYS = [
 ]
 
 # =========================
-# CSS + mikro-animacje
+# CSS + mikro-animacje (światło + iskry)
 # =========================
 CSS = """
 <style>
@@ -418,6 +413,20 @@ div.stButton > button:active{ transform: translateY(0px) scale(.99); }
 """
 
 # =========================
+# UID (Opcja 1): query params
+# =========================
+def ensure_user_id() -> str:
+    uid = st.query_params.get("uid")
+    if uid:
+        st.session_state.user_id = uid
+        return uid
+
+    new_uid = str(uuid.uuid4())
+    st.query_params["uid"] = new_uid
+    st.session_state.user_id = new_uid
+    st.rerun()
+
+# =========================
 # DB
 # =========================
 def db_connect():
@@ -530,24 +539,6 @@ def reset_user(con: sqlite3.Connection, user_id: str):
     con.commit()
 
 # =========================
-# UID w cookie (per przeglądarka/urządzenie)
-# =========================
-def ensure_user_id() -> str:
-    # cookie manager potrzebuje 1 renderu na inicjalizację
-    if not cookies.ready():
-        st.markdown('<div class="sdm-wrap"><div class="sdm-card">Ładowanie…</div></div>', unsafe_allow_html=True)
-        return ""
-
-    uid = cookies.get("uid")
-    if not uid:
-        uid = str(uuid.uuid4())
-        cookies["uid"] = uid
-        cookies.save()
-
-    st.session_state.user_id = uid
-    return uid
-
-# =========================
 # LOGIKA "1 karta dziennie"
 # =========================
 def active_day(start_date: date | None) -> int:
@@ -619,7 +610,7 @@ def render_start_screen(con: sqlite3.Connection, user: UserState):
             st.rerun()
 
     st.write("")
-    st.caption("Progres zapisuje się w SQLite, a identyfikacja jest per urządzenie (cookie).")
+    st.caption("Ten wariant identyfikuje użytkownika po parametrze uid w URL (bookmark = stały użytkownik).")
     st.markdown("</div>", unsafe_allow_html=True)
 
 def render_day_card(con: sqlite3.Connection, user: UserState, day: int):
@@ -751,13 +742,15 @@ def render_history(user: UserState):
 def render_sidebar(con: sqlite3.Connection, user: UserState):
     with st.sidebar:
         st.markdown("### Informacje")
-        st.caption(f"UID: {user.user_id[:8]}…")
+        st.caption(f"UID: {user.user_id[:8]}… (z URL)")
         if user.start_date:
             st.caption(f"Start: {user.start_date.isoformat()} (Europe/Warsaw)")
             st.caption(f"Odblokowany dzień: {active_day(user.start_date)}/14")
         else:
             st.caption("Nie rozpoczęto jeszcze podróży.")
 
+        st.markdown("---")
+        st.markdown("**Wskazówka:** aby zachować tego samego użytkownika, zapisz link w zakładkach.")
         st.markdown("---")
         if st.button("Reset (wyczyść postęp)", type="secondary"):
             reset_user(con, user.user_id)
@@ -771,10 +764,7 @@ def main():
 
     db_init()
 
-    user_id = ensure_user_id()
-    if not user_id:
-        st.stop()
-
+    user_id = ensure_user_id()  # zawsze zwróci uid albo zrobi rerun
     con = db_connect()
     user = load_user(con, user_id)
 
@@ -837,4 +827,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-
