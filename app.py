@@ -610,7 +610,7 @@ def render_start_screen(con: sqlite3.Connection, user: UserState):
             st.rerun()
 
     st.write("")
-    st.caption("Ten wariant identyfikuje użytkownika po parametrze uid w URL (bookmark = stały użytkownik).")
+    ##st.caption("Ten wariant identyfikuje użytkownika po parametrze uid w URL (bookmark = stały użytkownik).")
     st.markdown("</div>", unsafe_allow_html=True)
 
 def render_day_card(con: sqlite3.Connection, user: UserState, day: int):
