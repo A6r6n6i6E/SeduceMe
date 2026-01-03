@@ -7,7 +7,7 @@ from zoneinfo import ZoneInfo
 
 import requests
 import streamlit as st
-import streamlit.components.v1 as components
+from streamlit_javascript import st_javascript
 
 # =========================
 # KONFIG
@@ -15,6 +15,7 @@ import streamlit.components.v1 as components
 APP_TZ = ZoneInfo("Europe/Warsaw")
 GLOBAL_START = date(2026, 1, 1)
 TOTAL_DAYS = 14
+UID_STORAGE_KEY = "seduceme_uid"
 
 st.set_page_config(
     page_title="SeduceMe — 14 dni",
@@ -23,17 +24,13 @@ st.set_page_config(
     initial_sidebar_state="collapsed",
 )
 
-UID_STORAGE_KEY = "seduceme_uid"
-
 # =========================
-# CSS (skrót, ale z Twoimi mikro-animacjami)
+# CSS + mikro-animacje
 # =========================
 CSS = """
 <style>
 @import url('https://fonts.googleapis.com/css2?family=Playfair+Display:ital,wght@1,600;1,700&family=Montserrat:wght@300;400;600;700&display=swap');
-
 :root{ --bg:#1A1A1A; --accent:#C1272D; --heading:#7B1E24; --gold:#D4AF37; --muted:rgba(255,255,255,.68); --muted2:rgba(255,255,255,.52); }
-
 html, body, [data-testid="stAppViewContainer"]{
   background:
     radial-gradient(900px 480px at 18% 8%, rgba(193,39,45,.18), transparent 60%),
@@ -42,8 +39,6 @@ html, body, [data-testid="stAppViewContainer"]{
   color:white; font-family:Montserrat,system-ui; overflow-x:hidden;
 }
 [data-testid="stHeader"]{ background:transparent; }
-
-/* delikatne światło */
 [data-testid="stAppViewContainer"]::before{
   content:""; position:fixed; inset:-20%; pointer-events:none;
   background:
@@ -53,8 +48,6 @@ html, body, [data-testid="stAppViewContainer"]{
   animation: sdmLight 10s ease-in-out infinite alternate; opacity:.9;
 }
 @keyframes sdmLight{ from{transform:translate3d(0,0,0) scale(1);} to{transform:translate3d(-18px,12px,0) scale(1.02);} }
-
-/* iskry */
 [data-testid="stAppViewContainer"]::after{
   content:""; position:fixed; inset:0; pointer-events:none; opacity:.55;
   background-image:
@@ -70,9 +63,9 @@ html, body, [data-testid="stAppViewContainer"]{
 .sdm-wrap{ max-width:1120px; margin:0 auto; padding:.5rem 0 2.5rem; }
 .sdm-logo{
   font-family:"Playfair Display",serif; font-style:italic; letter-spacing:.5px;
-  font-size:64px; text-align:center;
+  font-size:64px; line-height:1.0; text-align:center;
   background:linear-gradient(90deg,var(--accent),var(--heading));
-  -webkit-background-clip:text; color:transparent;
+  -webkit-background-clip:text; background-clip:text; color:transparent;
   text-shadow:0 0 18px rgba(212,175,55,.20);
   margin:.6rem 0 .3rem;
 }
@@ -100,7 +93,7 @@ div.stButton > button{
 """
 
 # =========================
-# 14 dni (treści)
+# DANE (14 dni)
 # =========================
 DAYS = [
     {"day": 1, "title": "Ogniste Spojrzenia", "task": "Spójrzcie sobie głęboko w oczy i powoli zbliżajcie się do pocałunku. Każdy kolejny pocałunek jest dłuższy, bardziej gorący i pełen napięcia. Eksplorujcie usta, szyję i ramiona, ciesząc się każdym dotykiem i oddechem partnera.", "emoji": "🔥", "duration_min": 5},
@@ -144,60 +137,62 @@ def progress_percent() -> int:
     return int(round((d / TOTAL_DAYS) * 100))
 
 # =========================
-# UID: JS ustawia URL jeśli brak uid, Python tylko czyta URL
+# UID: localStorage + URL fallback (POPRAWNIE)
 # =========================
-def bootstrap_uid_from_localstorage():
-    """
-    Jeśli URL nie ma uid, JS:
-    - czyta localStorage
-    - jeśli brak -> generuje UUID i zapisuje
-    - dopisuje ?uid=... do URL i robi reload
-    """
-    # Robimy to zawsze, ale JS sam sprawdzi czy uid jest w URL.
-    components.html(
-        f"""
-        <script>
-        (function() {{
-          const KEY = "{UID_STORAGE_KEY}";
-          const url = new URL(window.location.href);
-          const hasUid = url.searchParams.get("uid");
-          if (hasUid) {{
-            try {{ localStorage.setItem(KEY, hasUid); }} catch(e) {{}}
-            return;
-          }}
-          let uid = null;
-          try {{
-            uid = localStorage.getItem(KEY);
-            if (!uid) {{
-              uid = (crypto.randomUUID ? crypto.randomUUID()
-                : (Date.now().toString(36) + Math.random().toString(36).slice(2)));
-              localStorage.setItem(KEY, uid);
-            }}
-          }} catch(e) {{
-            uid = (Date.now().toString(36) + Math.random().toString(36).slice(2));
-          }}
-          url.searchParams.set("uid", uid);
-          window.location.replace(url.toString());
-        }})();
-        </script>
-        """,
-        height=0,
-    )
+def _is_valid_uid(x: object) -> bool:
+    if not isinstance(x, str):
+        return False
+    s = x.strip()
+    if len(s) < 8 or len(s) > 80:
+        return False
+    if "DeltaGenerator" in s:
+        return False
+    # dopuszczamy uuid lub tokeny alfanum + - _
+    allowed = set("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-_")
+    return all(c in allowed for c in s) or ("-" in s and len(s) >= 20)
+
+def _ls_get() -> str | None:
+    v = st_javascript(f"return localStorage.getItem('{UID_STORAGE_KEY}');")
+    return v if isinstance(v, str) and v.strip() else None
+
+def _ls_set(uid: str) -> None:
+    _ = st_javascript(f"localStorage.setItem('{UID_STORAGE_KEY}', '{uid}'); return true;")
 
 def ensure_uid() -> str:
-    bootstrap_uid_from_localstorage()
+    # 1) jeśli URL ma uid -> użyj i zapisz do localStorage
+    uid_url = st.query_params.get("uid")
+    if _is_valid_uid(uid_url):
+        st.session_state["user_id"] = uid_url
+        try:
+            _ls_set(uid_url)
+        except Exception:
+            pass
+        return uid_url
 
-    uid = st.query_params.get("uid")
-    # Bezpieczeństwo: nigdy nie akceptuj dziwnych wartości (DeltaGenerator itp.)
-    if isinstance(uid, str) and 8 <= len(uid) <= 80 and "DeltaGenerator" not in uid:
-        st.session_state["user_id"] = uid
-        return uid
+    # 2) spróbuj localStorage
+    uid_ls = None
+    try:
+        uid_ls = _ls_get()
+    except Exception:
+        uid_ls = None
 
-    # Jeżeli jeszcze nie zdążyło przeładować (pierwszy render), zatrzymaj render
-    st.stop()
+    if _is_valid_uid(uid_ls):
+        st.session_state["user_id"] = uid_ls
+        st.query_params["uid"] = uid_ls
+        st.rerun()
+
+    # 3) jeśli nic nie ma -> wygeneruj nowy uid (python) i ustaw w localStorage + URL
+    new_uid = str(uuid.uuid4())
+    st.session_state["user_id"] = new_uid
+    try:
+        _ls_set(new_uid)
+    except Exception:
+        pass
+    st.query_params["uid"] = new_uid
+    st.rerun()
 
 # =========================
-# GitHub storage
+# GitHub storage (Opcja A)
 # =========================
 def _secrets_ok() -> bool:
     return ("GITHUB_TOKEN" in st.secrets) and ("GITHUB_REPO" in st.secrets)
@@ -279,6 +274,7 @@ def load_progress(uid: str) -> ProgressState:
 
     completed = set(int(x) for x in obj.get("completed", []) if str(x).isdigit())
     favorites = set(int(x) for x in obj.get("favorites", []) if str(x).isdigit())
+
     reactions_raw = obj.get("reactions", {})
     reactions: dict[int, str] = {}
     if isinstance(reactions_raw, dict):
@@ -329,6 +325,7 @@ def render_progress_bar():
             unsafe_allow_html=True,
         )
         return
+
     st.markdown(
         f"""
         <div class="sdm-progress">
@@ -340,41 +337,29 @@ def render_progress_bar():
               {pct}%
             </div>
           </div>
-          <div class="sdm-bar" style="margin-top:8px;"><div style="width:{pct}%;"></div></div>
+          <div class="sdm-bar" style="margin-top:8px;">
+            <div style="width:{pct}%;"></div>
+          </div>
         </div>
         """,
         unsafe_allow_html=True,
     )
 
-def render_sidebar(uid: str, prog: ProgressState):
+def render_sidebar(uid: str):
     with st.sidebar:
         st.markdown("### Informacje")
         st.caption(f"uid: {uid[:8]}…")
         st.caption(f"Start globalny: {GLOBAL_START.isoformat()}")
         st.caption(f"Dziś odblokowane: {active_day_global()}/{TOTAL_DAYS}")
-
         st.markdown("---")
         st.markdown("### Twój link (do przeniesienia na inne urządzenie)")
         st.code(st.get_url(), language="text")
-
         st.markdown("---")
         if _secrets_ok():
             st.caption(f"Repo storage: {_gh_repo()} ({_gh_branch()})")
             st.caption(f"Plik: {progress_path(uid)}")
         else:
             st.error("Brak secrets: GITHUB_TOKEN i/lub GITHUB_REPO — zapis nie działa.")
-
-        st.markdown("---")
-        if st.button("Reset (wyczyść mój progres)", type="secondary"):
-            if not _secrets_ok():
-                st.warning("Brak konfiguracji GitHub — nie mogę zresetować.")
-            else:
-                path = progress_path(uid)
-                _, sha = gh_get_json(path)
-                if sha:
-                    gh_delete_file(path, sha)
-                st.toast("Progres zresetowany", icon="🗑️")
-                st.rerun()
 
 def render_history(prog: ProgressState):
     st.markdown(
@@ -391,9 +376,13 @@ def render_history(prog: ProgressState):
     for i in range(TOTAL_DAYS):
         day = i + 1
         reacted = prog.reactions.get(day, DAYS[i]["emoji"])
-        unlocked = is_unlocked(day)
         with cols[i % 7]:
-            if st.button(f"{reacted}  Dzień {day}", key=f"grid_{day}", use_container_width=True, disabled=not unlocked):
+            if st.button(
+                f"{reacted}  Dzień {day}",
+                key=f"grid_{day}",
+                use_container_width=True,
+                disabled=not is_unlocked(day),
+            ):
                 st.session_state.selected_day = day
                 st.session_state.show_history = False
                 st.rerun()
@@ -402,9 +391,8 @@ def render_history(prog: ProgressState):
 
 def render_day_card(uid: str, prog: ProgressState, day: int) -> ProgressState:
     data = DAYS[day - 1]
-    unlocked = is_unlocked(day)
 
-    if not unlocked:
+    if not is_unlocked(day):
         st.markdown(
             f"""
             <div class="sdm-card">
@@ -457,7 +445,6 @@ def render_day_card(uid: str, prog: ProgressState, day: int) -> ProgressState:
         if st.button("Zapisz jako ukończone", use_container_width=True):
             prog.completed.add(day)
             prog = persist(prog)
-            st.toast("Zapisano ✅", icon="✅")
             st.rerun()
 
     with a2:
@@ -492,24 +479,23 @@ def main():
     st.markdown(CSS, unsafe_allow_html=True)
 
     uid = ensure_uid()
+    render_sidebar(uid)
 
     prog = ProgressState(set(), set(), {}, None)
     if _secrets_ok():
-        try:
-            prog = load_progress(uid)
-        except Exception as e:
-            st.error(f"Nie mogę pobrać progresu z GitHuba: {e}")
+        prog = load_progress(uid)
 
     if "show_history" not in st.session_state:
         st.session_state.show_history = False
     if "selected_day" not in st.session_state:
         st.session_state.selected_day = 1
 
-    render_sidebar(uid, prog)
-
     st.markdown('<div class="sdm-wrap">', unsafe_allow_html=True)
     st.markdown("<div class='sdm-logo' style='font-size:44px;'>SeduceMe</div>", unsafe_allow_html=True)
-    st.markdown("<div class='sdm-subtitle'>Globalne odblokowanie od 1 stycznia 2026 — po dniu 14 wszystko odblokowane na stałe</div>", unsafe_allow_html=True)
+    st.markdown(
+        "<div class='sdm-subtitle'>Globalne odblokowanie od 1 stycznia 2026 — po dniu 14 wszystko odblokowane na stałe</div>",
+        unsafe_allow_html=True,
+    )
 
     render_progress_bar()
 
@@ -531,12 +517,10 @@ def main():
         )
 
     st.write("")
-
     if st.session_state.show_history:
         render_history(prog)
     else:
-        day = int(st.session_state.selected_day)
-        day = max(1, min(TOTAL_DAYS, day))
+        day = max(1, min(TOTAL_DAYS, int(st.session_state.selected_day)))
         prog = render_day_card(uid, prog, day)
 
     st.markdown("</div>", unsafe_allow_html=True)
