@@ -762,7 +762,7 @@ def main():
 
     render_progress_bar()
 
-    top1, top2, top3, top4 = st.columns([1, 1, 1, 1.4])
+    top1, top2, top4 = st.columns([1, 1, 1, 1.4])
     with top1:
         if st.button("Dzisiaj", use_container_width=True):
             d = active_day_global()
@@ -772,10 +772,6 @@ def main():
     with top2:
         if st.button("Historia", use_container_width=True):
             st.session_state.show_history = True
-            st.rerun()
-    with top3:
-        if st.button("Karta dnia", use_container_width=True):
-            st.session_state.show_history = False
             st.rerun()
     with top4:
         st.markdown(
