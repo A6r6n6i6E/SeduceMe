@@ -1,12 +1,13 @@
 {
   "uid": "776475b8-e14b-4d96-8aae-fbe54be95198",
-  "updated_at": "2026-01-03T15:40:24.738899+01:00",
+  "updated_at": "2026-01-03T15:40:28.225763+01:00",
   "completed": [
     1,
     2
   ],
   "favorites": [
-    1
+    1,
+    2
   ],
   "reactions": {},
   "schema_version": 1
