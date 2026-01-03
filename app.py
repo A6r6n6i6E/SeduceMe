@@ -353,7 +353,13 @@ def render_sidebar(uid: str):
         st.caption(f"Dziś odblokowane: {active_day_global()}/{TOTAL_DAYS}")
         st.markdown("---")
         st.markdown("### Twój link (do przeniesienia na inne urządzenie)")
-        st.code(st.get_url(), language="text")
+        uid = st.query_params.get("uid", "")
+        base = st.secrets.get("APP_URL", "").rstrip("/")
+        if base:
+            st.code(f"{base}/?uid={uid}", language="text")
+        else:
+            st.code(f"/?uid={uid}", language="text")
+            st.caption("Opcjonalnie dodaj APP_URL w secrets, żeby pokazywać pełny link.")
         st.markdown("---")
         if _secrets_ok():
             st.caption(f"Repo storage: {_gh_repo()} ({_gh_branch()})")
