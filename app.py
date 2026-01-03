@@ -1,19 +1,3 @@
-# app.py
-# Opcja A: Jeden token aplikacji (w st.secrets) zapisuje postęp każdego użytkownika
-# do osobnego pliku w *Twoim* repo GitHub: progress/<uid>.json
-#
-# Wymagane secrets (Streamlit Cloud -> Settings -> Secrets):
-# GITHUB_TOKEN = "..."
-# GITHUB_REPO = "owner/repo"          # np. "artur/seduceme-data"
-# GITHUB_BRANCH = "main"              # opcjonalnie (domyślnie "main")
-#
-# Uprawnienia tokena (fine-grained): Contents: Read and write (dla repo)
-#
-# requirements.txt:
-# streamlit>=1.30
-# tzdata>=2024.1
-# requests>=2.31
-
 import base64
 import json
 import uuid
@@ -23,8 +7,7 @@ from zoneinfo import ZoneInfo
 
 import requests
 import streamlit as st
-import streamlit.components.v1 as components
-
+from streamlit_javascript import st_javascript
 
 # =========================
 # KONFIG
@@ -42,7 +25,7 @@ st.set_page_config(
 )
 
 # =========================
-# DANE (14 DNI)
+# DANE (14 dni)
 # =========================
 DAYS = [
     {
@@ -351,70 +334,13 @@ div.stButton > button:active{ transform: translateY(0px) scale(.99); }
 """
 
 # =========================
-# Pomocnicze: czas
+# Czas
 # =========================
 def now_local() -> datetime:
     return datetime.now(APP_TZ)
 
 def today_local() -> date:
     return now_local().date()
-
-# =========================
-# UID (z URL)
-# =========================
-def ensure_uid() -> str:
-    # 1) Jeśli już mamy w sesji, zwróć
-    if "user_id" in st.session_state and st.session_state.user_id:
-        return st.session_state.user_id
-
-    # 2) Jeśli uid jest w URL, użyj i (opcjonalnie) zapisz do localStorage
-    uid_from_url = st.query_params.get("uid")
-    if uid_from_url:
-        st.session_state.user_id = uid_from_url
-        # zapis do localStorage (żeby link bez uid też działał później)
-        components.html(
-            f"""
-            <script>
-              try {{ localStorage.setItem("seduceme_uid", "{uid_from_url}"); }} catch(e) {{}}
-            </script>
-            """,
-            height=0,
-        )
-        return uid_from_url
-
-    # 3) Jeśli nie ma w URL, spróbuj odczytać/zapisać w localStorage
-    uid = components.html(
-        """
-        <script>
-          (function () {
-            const KEY = "seduceme_uid";
-            let uid = null;
-            try {
-              uid = localStorage.getItem(KEY);
-              if (!uid) {
-                uid = (crypto.randomUUID ? crypto.randomUUID() :
-                  (Date.now().toString(36) + Math.random().toString(36).slice(2)));
-                localStorage.setItem(KEY, uid);
-              }
-            } catch (e) {
-              // localStorage zablokowany (rzadko) -> zrób jednorazowy uid
-              uid = (Date.now().toString(36) + Math.random().toString(36).slice(2));
-            }
-            document.write(uid);
-          })();
-        </script>
-        """,
-        height=0,
-    )
-
-    if not uid:
-        st.stop()
-
-    # 4) Zapisz w sesji, dopisz do URL jako fallback i zrerunuj
-    st.session_state.user_id = uid
-    st.query_params["uid"] = uid
-    st.rerun()
-
 
 # =========================
 # Globalne odblokowanie
@@ -435,10 +361,59 @@ def progress_percent() -> int:
     return int(round((d / TOTAL_DAYS) * 100))
 
 # =========================
+# UID: localStorage + URL fallback (poprawnie)
+# =========================
+UID_STORAGE_KEY = "seduceme_uid"
+
+def _js_get_uid_from_localstorage():
+    return st_javascript(f"return localStorage.getItem('{UID_STORAGE_KEY}');")
+
+def _js_set_uid_to_localstorage(uid: str):
+    _ = st_javascript(f"localStorage.setItem('{UID_STORAGE_KEY}', '{uid}'); return true;")
+
+def ensure_uid() -> str:
+    # 0) jeśli już jest w sesji
+    if st.session_state.get("user_id"):
+        return st.session_state["user_id"]
+
+    # 1) jeśli uid jest w URL -> użyj i zsynchronizuj do localStorage
+    uid_from_url = st.query_params.get("uid")
+    if uid_from_url:
+        st.session_state["user_id"] = uid_from_url
+        try:
+            _js_set_uid_to_localstorage(uid_from_url)
+        except Exception:
+            pass
+        return uid_from_url
+
+    # 2) jeśli nie ma w URL, spróbuj localStorage
+    uid_ls = None
+    try:
+        uid_ls = _js_get_uid_from_localstorage()
+    except Exception:
+        uid_ls = None
+
+    if isinstance(uid_ls, str) and uid_ls.strip():
+        st.session_state["user_id"] = uid_ls
+        # URL fallback
+        st.query_params["uid"] = uid_ls
+        st.rerun()
+
+    # 3) generuj nowy uid, zapisz do localStorage i dopisz do URL
+    new_uid = str(uuid.uuid4())
+    st.session_state["user_id"] = new_uid
+    try:
+        _js_set_uid_to_localstorage(new_uid)
+    except Exception:
+        pass
+    st.query_params["uid"] = new_uid
+    st.rerun()
+
+# =========================
 # GitHub storage (Contents API)
 # =========================
 def _secrets_ok() -> bool:
-    return "GITHUB_TOKEN" in st.secrets and "GITHUB_REPO" in st.secrets
+    return ("GITHUB_TOKEN" in st.secrets) and ("GITHUB_REPO" in st.secrets)
 
 def _gh_repo() -> str:
     return st.secrets["GITHUB_REPO"]
@@ -457,9 +432,6 @@ def _gh_url(path: str) -> str:
     return f"https://api.github.com/repos/{_gh_repo()}/contents/{path}"
 
 def gh_get_json(path: str) -> tuple[dict | None, str | None]:
-    """
-    Zwraca (obj, sha) albo (None, None) jeśli plik nie istnieje.
-    """
     r = requests.get(
         _gh_url(path),
         headers=_gh_headers(),
@@ -472,14 +444,9 @@ def gh_get_json(path: str) -> tuple[dict | None, str | None]:
     data = r.json()
     content_b64 = data.get("content", "")
     raw = base64.b64decode(content_b64).decode("utf-8") if content_b64 else "{}"
-    obj = json.loads(raw)
-    return obj, data.get("sha")
+    return json.loads(raw), data.get("sha")
 
 def gh_put_json(path: str, obj: dict, sha: str | None) -> None:
-    """
-    Tworzy albo aktualizuje plik.
-    Przy konflikcie (SHA) robi 1 retry z ponownym pobraniem.
-    """
     raw = json.dumps(obj, ensure_ascii=False, indent=2).encode("utf-8")
     payload = {
         "message": f"Update {path}",
@@ -491,9 +458,9 @@ def gh_put_json(path: str, obj: dict, sha: str | None) -> None:
 
     r = requests.put(_gh_url(path), headers=_gh_headers(), json=payload, timeout=20)
 
-    # konflikt/niezgodny sha -> refetch i retry raz
+    # Konflikt SHA -> 1 retry
     if r.status_code in (409, 422):
-        latest, latest_sha = gh_get_json(path)
+        _, latest_sha = gh_get_json(path)
         payload.pop("sha", None)
         if latest_sha:
             payload["sha"] = latest_sha
@@ -504,56 +471,48 @@ def gh_put_json(path: str, obj: dict, sha: str | None) -> None:
     r.raise_for_status()
 
 def gh_delete_file(path: str, sha: str) -> None:
-    payload = {
-        "message": f"Delete {path}",
-        "sha": sha,
-        "branch": _gh_branch(),
-    }
+    payload = {"message": f"Delete {path}", "sha": sha, "branch": _gh_branch()}
     r = requests.delete(_gh_url(path), headers=_gh_headers(), json=payload, timeout=20)
     if r.status_code == 404:
         return
     r.raise_for_status()
 
 # =========================
-# Model progresu
+# Progres
 # =========================
 @dataclass
 class ProgressState:
     completed: set[int]
     favorites: set[int]
     reactions: dict[int, str]
-    sha: str | None  # sha pliku na GitHub (do update/delete)
-
-def _empty_progress(sha: str | None = None) -> ProgressState:
-    return ProgressState(completed=set(), favorites=set(), reactions={}, sha=sha)
+    sha: str | None
 
 def progress_path(uid: str) -> str:
-    # osobny plik per user
     return f"progress/{uid}.json"
 
 def load_progress(uid: str) -> ProgressState:
     if not _secrets_ok():
-        return _empty_progress()
+        return ProgressState(set(), set(), {}, None)
 
     obj, sha = gh_get_json(progress_path(uid))
     if not obj:
-        return _empty_progress(sha=None)
+        return ProgressState(set(), set(), {}, None)
 
-    completed = set(int(x) for x in obj.get("completed", []) if isinstance(x, (int, float, str)))
-    favorites = set(int(x) for x in obj.get("favorites", []) if isinstance(x, (int, float, str)))
-    reactions = obj.get("reactions", {}) if isinstance(obj.get("reactions", {}), dict) else {}
+    completed = set(int(x) for x in obj.get("completed", []) if str(x).isdigit())
+    favorites = set(int(x) for x in obj.get("favorites", []) if str(x).isdigit())
 
-    # normalizacja kluczy reakcji do int->str
-    norm_reactions: dict[int, str] = {}
-    for k, v in reactions.items():
-        try:
-            day = int(k)
-        except Exception:
-            continue
-        if isinstance(v, str) and v:
-            norm_reactions[day] = v
+    reactions_raw = obj.get("reactions", {})
+    reactions: dict[int, str] = {}
+    if isinstance(reactions_raw, dict):
+        for k, v in reactions_raw.items():
+            try:
+                dk = int(k)
+            except Exception:
+                continue
+            if isinstance(v, str) and v.strip():
+                reactions[dk] = v
 
-    return ProgressState(completed=completed, favorites=favorites, reactions=norm_reactions, sha=sha)
+    return ProgressState(completed, favorites, reactions, sha)
 
 def save_progress(uid: str, prog: ProgressState) -> ProgressState:
     obj = {
@@ -567,14 +526,13 @@ def save_progress(uid: str, prog: ProgressState) -> ProgressState:
     path = progress_path(uid)
     gh_put_json(path, obj, prog.sha)
 
-    # po zapisie pobierz sha (żeby reset/delete działał pewnie)
-    obj2, sha2 = gh_get_json(path)
-    if sha2:
-        prog.sha = sha2
+    # odśwież sha
+    _, sha2 = gh_get_json(path)
+    prog.sha = sha2 or prog.sha
     return prog
 
 # =========================
-# UI helpers
+# UI
 # =========================
 def render_progress_bar():
     d = active_day_global()
@@ -619,125 +577,48 @@ def render_progress_bar():
 def render_sidebar(uid: str, prog: ProgressState):
     with st.sidebar:
         st.markdown("### Informacje")
-        st.caption(f"uid: {uid[:8]}… (z URL)")
+        st.caption(f"uid: {uid[:8]}…")
         st.caption(f"Start globalny: {GLOBAL_START.isoformat()}")
         st.caption(f"Dziś odblokowane: {active_day_global()}/{TOTAL_DAYS}")
 
         st.markdown("---")
-        if _secrets_ok():
-            st.caption(f"Repo storage: {_gh_repo()} ({_gh_branch()})")
-            st.caption(f"Plik: progress/{uid}.json")
-        else:
-            st.error("Brak secrets: GITHUB_TOKEN i/lub GITHUB_REPO — zapis nie będzie działał.")
+        st.markdown("### Twój link (do przeniesienia na inne urządzenie)")
+        st.code(st.get_url(), language="text")
 
         st.markdown("---")
-        st.markdown("**Wskazówka:** zapisz link w zakładkach (z parametrem `uid`), aby zachować ten sam postęp.")
+        if _secrets_ok():
+            st.caption(f"Repo storage: {_gh_repo()} ({_gh_branch()})")
+            st.caption(f"Plik: {progress_path(uid)}")
+        else:
+            st.error("Brak secrets: GITHUB_TOKEN i/lub GITHUB_REPO — zapis nie działa.")
+
+        st.markdown("---")
+        if st.button("Test połączenia z GitHub"):
+            if not _secrets_ok():
+                st.warning("Brak secrets.")
+            else:
+                try:
+                    r = requests.get(
+                        f"https://api.github.com/repos/{st.secrets['GITHUB_REPO']}",
+                        headers=_gh_headers(),
+                        timeout=15,
+                    )
+                    st.write("HTTP:", r.status_code)
+                    st.write(r.json())
+                except Exception as e:
+                    st.error(f"Test failed: {e}")
 
         st.markdown("---")
         if st.button("Reset (wyczyść mój progres)", type="secondary"):
             if not _secrets_ok():
                 st.warning("Brak konfiguracji GitHub — nie mogę zresetować.")
             else:
-                # delete file jeśli istnieje
                 path = progress_path(uid)
                 _, sha = gh_get_json(path)
                 if sha:
                     gh_delete_file(path, sha)
                 st.toast("Progres zresetowany", icon="🗑️")
                 st.rerun()
-
-def render_day_card(uid: str, prog: ProgressState, day: int):
-    data = DAYS[day - 1]
-    unlocked = is_unlocked(day)
-
-    if not unlocked:
-        st.markdown(
-            f"""
-            <div class="sdm-card">
-              <div class="sdm-h2">Dzień {day}: {data["title"]}</div>
-              <div class="sdm-task">
-                Ta karta jest jeszcze zablokowana — odblokowuje się jedna dziennie od {GLOBAL_START.isoformat()}.
-              </div>
-              <div class="sdm-meta">
-                <span class="sdm-pill">🔒 Zablokowana</span>
-                <span class="sdm-pill">Odblokowany dzień dziś: {active_day_global()}/{TOTAL_DAYS}</span>
-              </div>
-            </div>
-            """,
-            unsafe_allow_html=True,
-        )
-        return
-
-    reacted = prog.reactions.get(day, data["emoji"])
-    is_done = day in prog.completed
-    is_fav = day in prog.favorites
-
-    st.markdown(
-        f"""
-        <div class="sdm-card">
-          <div class="sdm-h2">Dzień {day}: {data["title"]}</div>
-          <div class="sdm-task">{data["task"]}</div>
-          <div class="sdm-meta">
-            <span class="sdm-pill">⏱️ {data["duration_min"]}–{data["duration_min"]+5} min</span>
-            <span class="sdm-pill">Reakcja: <b>{reacted}</b></span>
-            <span class="sdm-pill">{'✅ Ukończone' if is_done else '⬜ Do wykonania'}</span>
-            <span class="sdm-pill">{'❤️ Ulubione' if is_fav else '🤍 Ulubione'}</span>
-          </div>
-        </div>
-        """,
-        unsafe_allow_html=True,
-    )
-
-    st.write("")
-    a1, a2, a3, a4 = st.columns([1.1, 1, 1, 1.3])
-
-    def persist():
-        if not _secrets_ok():
-            st.warning("Brak secrets GitHub — nie zapiszę zmian.")
-            return prog
-        try:
-            updated = save_progress(uid, prog)
-            st.toast("Zapisano", icon="✅")
-            return updated
-        except requests.HTTPError as e:
-            # najczęstsze: brak uprawnień tokena albo rate limit
-            st.error(f"GitHub API error: {e}")
-            return prog
-        except Exception as e:
-            st.error(f"Błąd zapisu: {e}")
-            return prog
-
-    with a1:
-        if st.button("Zapisz jako ukończone", use_container_width=True):
-            prog.completed.add(day)
-            prog = persist()
-            st.rerun()
-
-    with a2:
-        if st.button("❤️ / 🤍 Ulubione", use_container_width=True):
-            if is_fav:
-                prog.favorites.discard(day)
-            else:
-                prog.favorites.add(day)
-            prog = persist()
-            st.rerun()
-
-    with a3:
-        emoji_options = ["🔥", "💋", "✨", "🖤", "⚡", "🕯️", "🌙", "🎭", "🍓", "🔓"]
-        idx = emoji_options.index(reacted) if reacted in emoji_options else 0
-        emoji = st.selectbox("Emoji reakcji", options=emoji_options, index=idx, key=f"react_{day}")
-        if st.button("Zapisz reakcję", use_container_width=True):
-            prog.reactions[day] = emoji
-            prog = persist()
-            st.rerun()
-
-    with a4:
-        if st.button("Pokaż kolejny dzień", use_container_width=True):
-            st.session_state.selected_day = min(TOTAL_DAYS, day + 1)
-            st.rerun()
-
-    # zwróć ewentualnie zaktualizowany obiekt (gdybyś kiedyś chciał go używać wyżej)
-    return prog
 
 def render_history(prog: ProgressState):
     st.markdown(
@@ -773,6 +654,98 @@ def render_history(prog: ProgressState):
         if (i % 7) == 6 and i != TOTAL_DAYS - 1:
             cols = st.columns(7)
 
+def render_day_card(uid: str, prog: ProgressState, day: int) -> ProgressState:
+    data = DAYS[day - 1]
+    unlocked = is_unlocked(day)
+
+    if not unlocked:
+        st.markdown(
+            f"""
+            <div class="sdm-card">
+              <div class="sdm-h2">Dzień {day}: {data["title"]}</div>
+              <div class="sdm-task">
+                Ta karta jest jeszcze zablokowana — odblokowuje się jedna dziennie od {GLOBAL_START.isoformat()}.
+              </div>
+              <div class="sdm-meta">
+                <span class="sdm-pill">🔒 Zablokowana</span>
+                <span class="sdm-pill">Odblokowany dzień dziś: {active_day_global()}/{TOTAL_DAYS}</span>
+              </div>
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
+        return prog
+
+    reacted = prog.reactions.get(day, data["emoji"])
+    is_done = day in prog.completed
+    is_fav = day in prog.favorites
+
+    st.markdown(
+        f"""
+        <div class="sdm-card">
+          <div class="sdm-h2">Dzień {day}: {data["title"]}</div>
+          <div class="sdm-task">{data["task"]}</div>
+          <div class="sdm-meta">
+            <span class="sdm-pill">⏱️ {data["duration_min"]}–{data["duration_min"]+5} min</span>
+            <span class="sdm-pill">Reakcja: <b>{reacted}</b></span>
+            <span class="sdm-pill">{'✅ Ukończone' if is_done else '⬜ Do wykonania'}</span>
+            <span class="sdm-pill">{'❤️ Ulubione' if is_fav else '🤍 Ulubione'}</span>
+          </div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+    def persist(p: ProgressState) -> ProgressState:
+        if not _secrets_ok():
+            st.warning("Brak secrets GitHub — nie zapiszę zmian.")
+            return p
+        try:
+            return save_progress(uid, p)
+        except requests.HTTPError as e:
+            st.error(f"GitHub API error: {e}")
+            return p
+        except Exception as e:
+            st.error(f"Błąd zapisu: {e}")
+            return p
+
+    st.write("")
+    a1, a2, a3, a4 = st.columns([1.1, 1, 1, 1.3])
+
+    with a1:
+        if st.button("Zapisz jako ukończone", use_container_width=True):
+            prog.completed.add(day)
+            prog = persist(prog)
+            st.toast("Zapisano ✅", icon="✅")
+            st.rerun()
+
+    with a2:
+        if st.button("❤️ / 🤍 Ulubione", use_container_width=True):
+            if is_fav:
+                prog.favorites.discard(day)
+            else:
+                prog.favorites.add(day)
+            prog = persist(prog)
+            st.toast("Zapisano", icon="❤️" if day in prog.favorites else "🤍")
+            st.rerun()
+
+    with a3:
+        emoji_options = ["🔥", "💋", "✨", "🖤", "⚡", "🕯️", "🌙", "🎭", "🍓", "🔓"]
+        idx = emoji_options.index(reacted) if reacted in emoji_options else 0
+        emoji = st.selectbox("Emoji reakcji", options=emoji_options, index=idx, key=f"react_{day}")
+        if st.button("Zapisz reakcję", use_container_width=True):
+            prog.reactions[day] = emoji
+            prog = persist(prog)
+            st.toast("Reakcja zapisana", icon="✨")
+            st.rerun()
+
+    with a4:
+        if st.button("Pokaż kolejny dzień", use_container_width=True):
+            st.session_state.selected_day = min(TOTAL_DAYS, day + 1)
+            st.rerun()
+
+    return prog
+
 # =========================
 # MAIN
 # =========================
@@ -781,15 +754,13 @@ def main():
 
     uid = ensure_uid()
 
-    # ładuj progres z GitHub
-    prog = _empty_progress()
+    # load progress from GitHub
+    prog = ProgressState(set(), set(), {}, None)
     if _secrets_ok():
         try:
             prog = load_progress(uid)
-        except requests.HTTPError as e:
-            st.error(f"Nie mogę pobrać progresu z GitHuba: {e}")
         except Exception as e:
-            st.error(f"Błąd odczytu progresu: {e}")
+            st.error(f"Nie mogę pobrać progresu z GitHuba: {e}")
 
     if "show_history" not in st.session_state:
         st.session_state.show_history = False
@@ -801,7 +772,7 @@ def main():
     st.markdown('<div class="sdm-wrap">', unsafe_allow_html=True)
     st.markdown("<div class='sdm-logo' style='font-size:44px;'>SeduceMe</div>", unsafe_allow_html=True)
     st.markdown(
-        "<div class='sdm-subtitle'> </div>",
+        "<div class='sdm-subtitle'>Globalne odblokowanie od 1 stycznia 2026 — po dniu 14 wszystko odblokowane na stałe</div>",
         unsafe_allow_html=True,
     )
 
@@ -835,7 +806,7 @@ def main():
     else:
         day = int(st.session_state.selected_day)
         day = max(1, min(TOTAL_DAYS, day))
-        prog = render_day_card(uid, prog, day) or prog
+        prog = render_day_card(uid, prog, day)
 
     st.markdown("</div>", unsafe_allow_html=True)
 
