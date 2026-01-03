@@ -12,21 +12,99 @@ import streamlit as st
 # KONFIG
 # =========================
 APP_TZ = ZoneInfo("Europe/Warsaw")
+GLOBAL_START = date(2026, 1, 1)  # <-- stały start od 1 stycznia 2026
+TOTAL_DAYS = 14
 
 st.set_page_config(
-    page_title="SeduceMe — 14 dni namiętności",
+    page_title="SeduceMe — 14 dni",
     page_icon="🔥",
     layout="wide",
     initial_sidebar_state="collapsed",
 )
 
-# DB (na Streamlit Cloud trzymaj w katalogu projektu; jeśli środowisko nie persistuje, rozważ zewn. DB)
+# =========================
+# DB (progres per uid)
+# =========================
 DB_DIR = os.path.join(os.path.dirname(__file__), "data")
 os.makedirs(DB_DIR, exist_ok=True)
 DB_PATH = os.path.join(DB_DIR, "seduceme.db")
 
+
+def db_connect():
+    con = sqlite3.connect(DB_PATH, check_same_thread=False)
+    con.execute("PRAGMA journal_mode=WAL;")
+    return con
+
+
+def db_init():
+    con = db_connect()
+    con.execute(
+        """
+    CREATE TABLE IF NOT EXISTS progress (
+      user_id TEXT NOT NULL,
+      day INTEGER NOT NULL,
+      completed_at TEXT,
+      favorite INTEGER NOT NULL DEFAULT 0,
+      reaction TEXT,
+      PRIMARY KEY (user_id, day)
+    );
+    """
+    )
+    con.commit()
+    con.close()
+
+
+def now_local() -> datetime:
+    return datetime.now(APP_TZ)
+
+
+def today_local() -> date:
+    return now_local().date()
+
+
 # =========================
-# DANE (14 DNI)
+# UID w URL (Opcja 1)
+# =========================
+def ensure_uid() -> str:
+    uid = st.query_params.get("uid")
+    if uid:
+        st.session_state.user_id = uid
+        return uid
+
+    new_uid = str(uuid.uuid4())
+    st.query_params["uid"] = new_uid
+    st.session_state.user_id = new_uid
+    st.rerun()
+
+
+# =========================
+# GLOBALNE ODBLOKOWANIE
+# - start: 1 stycznia 2026
+# - po dniu 14 wszystko odblokowane na stałe
+# =========================
+def active_day_global() -> int:
+    # Przed startem: nic nie odblokowujemy (dzień 0)
+    if today_local() < GLOBAL_START:
+        return 0
+
+    delta = (today_local() - GLOBAL_START).days  # 0 w dniu startu
+    # odblokowanie 1..14, potem już stałe 14
+    return max(1, min(TOTAL_DAYS, delta + 1))
+
+
+def is_unlocked(day: int) -> bool:
+    return day <= active_day_global()
+
+
+def progress_percent() -> int:
+    d = active_day_global()
+    if d <= 0:
+        return 0
+    return int(round((d / TOTAL_DAYS) * 100))
+
+
+# =========================
+# DANE (14 dni)
 # =========================
 DAYS = [
     {
@@ -175,7 +253,7 @@ DAYS = [
 ]
 
 # =========================
-# CSS + mikro-animacje (światło + iskry)
+# CSS + mikro-animacje
 # =========================
 CSS = """
 <style>
@@ -242,7 +320,6 @@ html, body, [data-testid="stAppViewContainer"]{
 }
 
 .sdm-wrap{ max-width: 1120px; margin: 0 auto; padding: 0.5rem 0 2.5rem; }
-
 .sdm-logo{
   font-family: "Playfair Display", serif;
   font-style: italic;
@@ -257,44 +334,12 @@ html, body, [data-testid="stAppViewContainer"]{
   text-shadow: 0 0 18px rgba(212,175,55,.20);
   margin: 0.6rem 0 0.3rem;
 }
-
 .sdm-subtitle{
   text-align:center;
   color: var(--muted);
   margin: 0 0 1.2rem;
   font-weight: 300;
 }
-
-.sdm-hero{
-  position: relative;
-  border-radius: 26px;
-  padding: 28px 26px;
-  background:
-     radial-gradient(700px 280px at 25% 20%, rgba(193,39,45,.22), transparent 62%),
-     radial-gradient(700px 280px at 80% 40%, rgba(212,175,55,.10), transparent 60%),
-     linear-gradient(180deg, rgba(255,255,255,.04), rgba(255,255,255,.02));
-  border: 1px solid rgba(255,255,255,.08);
-  box-shadow: 0 18px 55px rgba(0,0,0,.50);
-  overflow: hidden;
-}
-
-/* shimmer */
-.sdm-hero::after{
-  content:"";
-  position:absolute;
-  inset:-40%;
-  background: linear-gradient(120deg, transparent 40%, rgba(255,255,255,.05) 50%, transparent 60%);
-  transform: translateX(-35%);
-  animation: sdmShimmer 6s ease-in-out infinite;
-  pointer-events:none;
-  opacity:.75;
-}
-@keyframes sdmShimmer{
-  0%   { transform: translateX(-35%) rotate(8deg); }
-  50%  { transform: translateX(35%) rotate(8deg); }
-  100% { transform: translateX(-35%) rotate(8deg); }
-}
-
 .sdm-card{
   background: linear-gradient(180deg, rgba(255,255,255,.03), rgba(255,255,255,.01));
   border: 1px solid rgba(255,255,255,.08);
@@ -302,7 +347,6 @@ html, body, [data-testid="stAppViewContainer"]{
   padding: 20px 20px;
   box-shadow: 0 14px 40px rgba(0,0,0,.45);
 }
-
 .sdm-h2{
   font-family: "Playfair Display", serif;
   font-style: italic;
@@ -310,14 +354,12 @@ html, body, [data-testid="stAppViewContainer"]{
   margin: 0 0 8px;
   font-size: 34px;
 }
-
 .sdm-task{
   color: rgba(255,255,255,.82);
   font-size: 17px;
   line-height: 1.65;
   margin: 0 0 14px;
 }
-
 .sdm-meta{
   display:flex;
   gap: 10px;
@@ -326,7 +368,6 @@ html, body, [data-testid="stAppViewContainer"]{
   font-size: 14px;
   margin-top: 6px;
 }
-
 .sdm-pill{
   display:inline-flex;
   align-items:center;
@@ -336,7 +377,6 @@ html, body, [data-testid="stAppViewContainer"]{
   background: rgba(255,255,255,.04);
   border: 1px solid rgba(255,255,255,.08);
 }
-
 .sdm-progress{
   margin: 10px 0 18px;
   padding: 10px 12px;
@@ -344,14 +384,12 @@ html, body, [data-testid="stAppViewContainer"]{
   background: rgba(0,0,0,.18);
   border: 1px solid rgba(255,255,255,.06);
 }
-
 .sdm-bar{
   height: 8px;
   border-radius: 999px;
   background: rgba(255,255,255,.08);
   overflow:hidden;
 }
-
 .sdm-bar > div{
   height: 100%;
   background: linear-gradient(90deg, var(--accent), var(--heading));
@@ -359,7 +397,6 @@ html, body, [data-testid="stAppViewContainer"]{
   box-shadow: 0 0 18px rgba(193,39,45,.35);
   transition: width .35s ease;
 }
-
 div.stButton > button{
   border-radius: 14px !important;
   border: 1px solid rgba(212,175,55,.42) !important;
@@ -373,121 +410,24 @@ div.stButton > button{
 }
 div.stButton > button:hover{ transform: translateY(-1px); filter: brightness(1.08); }
 div.stButton > button:active{ transform: translateY(0px) scale(.99); }
-
-.sdm-flip{
-  animation: sdmFlip .55s ease;
-  transform-origin: center;
-}
-@keyframes sdmFlip{
-  from{ transform: rotateY(-10deg) scale(.985); opacity: .6; }
-  to{ transform: rotateY(0deg) scale(1); opacity: 1; }
-}
-
-.sdm-culm{
-  border-radius: 28px;
-  padding: 34px 26px;
-  background: radial-gradient(900px 420px at 20% 20%, rgba(212,175,55,.15), transparent 62%),
-              radial-gradient(900px 420px at 70% 30%, rgba(193,39,45,.28), transparent 62%),
-              linear-gradient(180deg, rgba(123,30,36,.28), rgba(17,17,17,.25));
-  border: 1px solid rgba(212,175,55,.18);
-  box-shadow: 0 22px 70px rgba(0,0,0,.55);
-  position: relative;
-  overflow:hidden;
-}
-
-.sdm-glow{
-  position:absolute;
-  inset:-120px -120px auto auto;
-  width: 520px;
-  height: 520px;
-  border-radius: 999px;
-  background: radial-gradient(circle at 30% 30%, rgba(212,175,55,.20), transparent 60%);
-  animation: sdmGlow 3.6s ease-in-out infinite alternate;
-  pointer-events:none;
-}
-@keyframes sdmGlow{
-  from{ transform: translate(0px, 0px) scale(1); opacity: .55; }
-  to{ transform: translate(-22px, 18px) scale(1.06); opacity: .85; }
-}
+.sdm-flip{ animation: sdmFlip .55s ease; transform-origin:center; }
+@keyframes sdmFlip{ from{ transform: rotateY(-10deg) scale(.985); opacity:.6; } to{ transform: rotateY(0deg) scale(1); opacity:1; } }
 </style>
 """
 
 # =========================
-# UID (Opcja 1): query params
+# Progres: load/save
 # =========================
-def ensure_user_id() -> str:
-    uid = st.query_params.get("uid")
-    if uid:
-        st.session_state.user_id = uid
-        return uid
-
-    new_uid = str(uuid.uuid4())
-    st.query_params["uid"] = new_uid
-    st.session_state.user_id = new_uid
-    st.rerun()
-
-# =========================
-# DB
-# =========================
-def db_connect():
-    con = sqlite3.connect(DB_PATH, check_same_thread=False)
-    con.execute("PRAGMA journal_mode=WAL;")
-    con.execute("PRAGMA foreign_keys=ON;")
-    return con
-
-def db_init():
-    con = db_connect()
-    con.execute("""
-    CREATE TABLE IF NOT EXISTS users (
-      user_id TEXT PRIMARY KEY,
-      created_at TEXT NOT NULL,
-      start_date TEXT
-    );
-    """)
-    con.execute("""
-    CREATE TABLE IF NOT EXISTS progress (
-      user_id TEXT NOT NULL,
-      day INTEGER NOT NULL,
-      completed_at TEXT,
-      favorite INTEGER NOT NULL DEFAULT 0,
-      reaction TEXT,
-      PRIMARY KEY (user_id, day),
-      FOREIGN KEY (user_id) REFERENCES users(user_id) ON DELETE CASCADE
-    );
-    """)
-    con.commit()
-    con.close()
-
 @dataclass
-class UserState:
-    user_id: str
-    started: bool
-    start_date: date | None
+class ProgressState:
     completed: set[int]
     favorites: set[int]
     reactions: dict[int, str]
 
-def now_local() -> datetime:
-    return datetime.now(APP_TZ)
 
-def today_local() -> date:
-    return now_local().date()
-
-def load_user(con: sqlite3.Connection, user_id: str) -> UserState:
-    cur = con.execute("SELECT start_date FROM users WHERE user_id = ?", (user_id,))
-    row = cur.fetchone()
-    if not row:
-        con.execute(
-            "INSERT INTO users(user_id, created_at, start_date) VALUES(?, ?, NULL)",
-            (user_id, now_local().isoformat()),
-        )
-        con.commit()
-        start_date = None
-    else:
-        start_date = date.fromisoformat(row[0]) if row[0] else None
-
-    completed = set()
-    favorites = set()
+def load_progress(con: sqlite3.Connection, user_id: str) -> ProgressState:
+    completed: set[int] = set()
+    favorites: set[int] = set()
     reactions: dict[int, str] = {}
 
     cur = con.execute(
@@ -503,69 +443,65 @@ def load_user(con: sqlite3.Connection, user_id: str) -> UserState:
         if reaction:
             reactions[d] = reaction
 
-    return UserState(
-        user_id=user_id,
-        started=start_date is not None,
-        start_date=start_date,
-        completed=completed,
-        favorites=favorites,
-        reactions=reactions,
-    )
+    return ProgressState(completed=completed, favorites=favorites, reactions=reactions)
 
-def save_start(con: sqlite3.Connection, user_id: str, start_date: date):
+
+def upsert_progress(
+    con: sqlite3.Connection,
+    user_id: str,
+    day: int,
+    completed_at: str | None = None,
+    favorite: int | None = None,
+    reaction: str | None = None,
+):
     con.execute(
-        "UPDATE users SET start_date = ? WHERE user_id = ?",
-        (start_date.isoformat(), user_id),
-    )
-    con.commit()
-
-def upsert_progress(con: sqlite3.Connection, user_id: str, day: int,
-                    completed_at: str | None = None,
-                    favorite: int | None = None,
-                    reaction: str | None = None):
-    con.execute("""
+        """
     INSERT INTO progress(user_id, day, completed_at, favorite, reaction)
     VALUES (?, ?, ?, COALESCE(?, 0), ?)
     ON CONFLICT(user_id, day) DO UPDATE SET
       completed_at = COALESCE(excluded.completed_at, progress.completed_at),
       favorite     = COALESCE(excluded.favorite, progress.favorite),
       reaction     = COALESCE(excluded.reaction, progress.reaction);
-    """, (user_id, day, completed_at, favorite, reaction))
+    """,
+        (user_id, day, completed_at, favorite, reaction),
+    )
     con.commit()
 
+
 def reset_user(con: sqlite3.Connection, user_id: str):
-    con.execute("UPDATE users SET start_date = NULL WHERE user_id = ?", (user_id,))
     con.execute("DELETE FROM progress WHERE user_id = ?", (user_id,))
     con.commit()
 
-# =========================
-# LOGIKA "1 karta dziennie"
-# =========================
-def active_day(start_date: date | None) -> int:
-    if not start_date:
-        return 1
-    delta = (today_local() - start_date).days
-    return max(1, min(14, delta + 1))
-
-def is_unlocked(day: int, start_date: date | None) -> bool:
-    return day <= active_day(start_date)
-
-def progress_percent(start_date: date | None) -> int:
-    d = active_day(start_date)
-    return int(round((d / 14) * 100))
 
 # =========================
 # UI
 # =========================
-def render_progress(start_date: date | None):
-    d = active_day(start_date)
-    pct = progress_percent(start_date)
+def render_progress_bar():
+    d = active_day_global()
+    pct = progress_percent()
+
+    if d == 0:
+        msg = f"Start od: {GLOBAL_START.isoformat()} (Europe/Warsaw)"
+        st.markdown(
+            f"""
+            <div class="sdm-progress">
+              <div style="display:flex; align-items:center; justify-content:space-between; gap:12px;">
+                <div style="color:rgba(255,255,255,.78); font-size:14px;"><b>Jeszcze nie startujemy</b></div>
+                <div style="color:rgba(255,255,255,.55); font-size:12px;">{msg}</div>
+              </div>
+              <div class="sdm-bar" style="margin-top:8px;"><div style="width:0%;"></div></div>
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
+        return
+
     st.markdown(
         f"""
         <div class="sdm-progress">
           <div style="display:flex; align-items:center; justify-content:space-between; gap:12px;">
             <div style="color:rgba(255,255,255,.78); font-size:14px;">
-              Postęp: <b>Dzień {d}/14</b>
+              Odblokowane: <b>Dzień {d}/{TOTAL_DAYS}</b>
             </div>
             <div style="color:rgba(255,255,255,.55); font-size:12px;">
               {pct}%
@@ -579,78 +515,20 @@ def render_progress(start_date: date | None):
         unsafe_allow_html=True,
     )
 
-def render_start_screen(con: sqlite3.Connection, user: UserState):
-    st.markdown('<div class="sdm-wrap">', unsafe_allow_html=True)
-    st.markdown(f"<div class='sdm-logo'>SeduceMe</div>", unsafe_allow_html=True)
-    st.markdown("<div class='sdm-subtitle'>14 dni namiętności dla par</div>", unsafe_allow_html=True)
 
-    st.markdown(
-        """
-        <div class="sdm-hero">
-          <div style="max-width:780px;">
-            <div style="font-family:'Playfair Display',serif;font-style:italic;color:rgba(255,255,255,.86);
-                        font-size:28px;margin-bottom:10px;">
-              ZACZNIJCIE SWOJĄ PODRÓŻ JUŻ DZIŚ!
-            </div>
-            <div style="color:rgba(255,255,255,.72); font-size:16px; line-height:1.7;">
-              Dyskretny, zmysłowy kalendarz z codzienną kartą. Jedno zadanie dziennie, historia postępów
-              i kulminacja w dniu 14 — wszystko w eleganckiej oprawie.
-            </div>
-          </div>
-        </div>
-        """,
-        unsafe_allow_html=True,
-    )
-
-    st.write("")
-    c1, c2, c3 = st.columns([1.2, 1, 1.2])
-    with c2:
-        if st.button("Rozpocznij swoją 14-dniową podróż", use_container_width=True):
-            save_start(con, user.user_id, today_local())
-            st.rerun()
-
-    st.write("")
-    ##st.caption("Ten wariant identyfikuje użytkownika po parametrze uid w URL (bookmark = stały użytkownik).")
-    st.markdown("</div>", unsafe_allow_html=True)
-
-def render_day_card(con: sqlite3.Connection, user: UserState, day: int):
+def render_day_card(con: sqlite3.Connection, uid: str, prog: ProgressState, day: int):
     data = DAYS[day - 1]
-    unlocked = is_unlocked(day, user.start_date)
-
-    if day == 14 and unlocked:
-        st.markdown(
-            f"""
-            <div class="sdm-culm sdm-flip">
-              <div class="sdm-glow"></div>
-              <div class="sdm-h2">Dzień 14: {data["title"]}</div>
-              <div class="sdm-task" style="font-size:18px;">
-                {data["task"]}
-              </div>
-              <div class="sdm-meta">
-                <span class="sdm-pill">⏱️ {data["duration_min"]}–{data["duration_min"]+10} min</span>
-                <span class="sdm-pill">✨ Kulminacja</span>
-              </div>
-            </div>
-            """,
-            unsafe_allow_html=True,
-        )
-        st.write("")
-        c1, c2, c3 = st.columns([1, 1, 1])
-        with c2:
-            st.button("Zanurz się teraz", use_container_width=True)
-        return
+    unlocked = is_unlocked(day)
 
     if not unlocked:
         st.markdown(
             f"""
             <div class="sdm-card">
               <div class="sdm-h2">Dzień {day}: {data["title"]}</div>
-              <div class="sdm-task">
-                Ta karta jest jeszcze zablokowana — odblokowuje się jedna dziennie.
-              </div>
+              <div class="sdm-task">Ta karta jest jeszcze zablokowana — odblokowuje się jedna dziennie od {GLOBAL_START.isoformat()}.</div>
               <div class="sdm-meta">
                 <span class="sdm-pill">🔒 Zablokowana</span>
-                <span class="sdm-pill">⏳ Odblokuje się w kolejnych dniach</span>
+                <span class="sdm-pill">Odblokowany dzień dziś: {active_day_global()}/{TOTAL_DAYS}</span>
               </div>
             </div>
             """,
@@ -658,9 +536,9 @@ def render_day_card(con: sqlite3.Connection, user: UserState, day: int):
         )
         return
 
-    reacted = user.reactions.get(day, data["emoji"])
-    is_done = day in user.completed
-    is_fav = day in user.favorites
+    reacted = prog.reactions.get(day, data["emoji"])
+    is_done = day in prog.completed
+    is_fav = day in prog.favorites
 
     st.markdown(
         f"""
@@ -683,14 +561,14 @@ def render_day_card(con: sqlite3.Connection, user: UserState, day: int):
 
     with a1:
         if st.button("Zapisz jako ukończone", use_container_width=True):
-            upsert_progress(con, user.user_id, day, completed_at=now_local().isoformat())
+            upsert_progress(con, uid, day, completed_at=now_local().isoformat())
             st.toast("Zapisano ✅", icon="✅")
             st.rerun()
 
     with a2:
         if st.button("❤️ / 🤍 Ulubione", use_container_width=True):
             fav_value = 0 if is_fav else 1
-            upsert_progress(con, user.user_id, day, favorite=fav_value)
+            upsert_progress(con, uid, day, favorite=fav_value)
             st.rerun()
 
     with a3:
@@ -698,22 +576,23 @@ def render_day_card(con: sqlite3.Connection, user: UserState, day: int):
         idx = emoji_options.index(reacted) if reacted in emoji_options else 0
         emoji = st.selectbox("Emoji reakcji", options=emoji_options, index=idx, key=f"react_{day}")
         if st.button("Zapisz reakcję", use_container_width=True):
-            upsert_progress(con, user.user_id, day, reaction=emoji)
+            upsert_progress(con, uid, day, reaction=emoji)
             st.toast("Reakcja zapisana", icon="✨")
             st.rerun()
 
     with a4:
-        if st.button("Odkryj kolejną kartę", use_container_width=True):
-            st.session_state.selected_day = min(14, day + 1)
+        if st.button("Pokaż kolejny dzień", use_container_width=True):
+            st.session_state.selected_day = min(TOTAL_DAYS, day + 1)
             st.rerun()
 
-def render_history(user: UserState):
+
+def render_history(uid: str, prog: ProgressState):
     st.markdown(
         """
         <div style="display:flex; align-items:flex-end; justify-content:space-between; gap:12px; margin-top:10px;">
           <div class="sdm-h2" style="margin:0;">Historia / Postępy</div>
           <div style="color:rgba(255,255,255,.55); font-size:13px;">
-            Kliknij dzień, aby podejrzeć
+            Kliknij dzień, aby podejrzeć (zablokowane nieaktywne)
           </div>
         </div>
         """,
@@ -722,39 +601,41 @@ def render_history(user: UserState):
     st.write("")
 
     cols = st.columns(7)
-    for i in range(14):
+    for i in range(TOTAL_DAYS):
         day = i + 1
-        data = DAYS[i]
-        unlocked = is_unlocked(day, user.start_date)
-        reacted = user.reactions.get(day, data["emoji"])
-        label = f"{reacted}  Dzień {day}"
+        reacted = prog.reactions.get(day, DAYS[i]["emoji"])
+        unlocked = is_unlocked(day)
 
-        col = cols[i % 7]
-        with col:
-            if st.button(label, key=f"grid_{day}", use_container_width=True, disabled=not unlocked):
+        with cols[i % 7]:
+            if st.button(
+                f"{reacted}  Dzień {day}",
+                key=f"grid_{day}",
+                use_container_width=True,
+                disabled=not unlocked,
+            ):
                 st.session_state.selected_day = day
                 st.session_state.show_history = False
                 st.rerun()
 
-        if (i % 7) == 6 and i != 13:
+        if (i % 7) == 6 and i != TOTAL_DAYS - 1:
             cols = st.columns(7)
 
-def render_sidebar(con: sqlite3.Connection, user: UserState):
+
+def render_sidebar(con: sqlite3.Connection, uid: str):
     with st.sidebar:
         st.markdown("### Informacje")
-        st.caption(f"UID: {user.user_id[:8]}… (z URL)")
-        if user.start_date:
-            st.caption(f"Start: {user.start_date.isoformat()} (Europe/Warsaw)")
-            st.caption(f"Odblokowany dzień: {active_day(user.start_date)}/14")
-        else:
-            st.caption("Nie rozpoczęto jeszcze podróży.")
+        st.caption(f"uid: {uid[:8]}… (z URL)")
+        st.caption(f"Start globalny: {GLOBAL_START.isoformat()}")
+        st.caption(f"Dziś odblokowane: {active_day_global()}/{TOTAL_DAYS}")
 
         st.markdown("---")
-        st.markdown("**Wskazówka:** aby zachować tego samego użytkownika, zapisz link w zakładkach.")
+        st.caption("Aby zachować tego samego użytkownika, zapisuj link (z parametrem uid) w zakładkach.")
+
         st.markdown("---")
-        if st.button("Reset (wyczyść postęp)", type="secondary"):
-            reset_user(con, user.user_id)
+        if st.button("Reset (wyczyść mój progres)", type="secondary"):
+            reset_user(con, uid)
             st.rerun()
+
 
 # =========================
 # MAIN
@@ -763,33 +644,32 @@ def main():
     st.markdown(CSS, unsafe_allow_html=True)
 
     db_init()
+    uid = ensure_uid()
 
-    user_id = ensure_user_id()  # zawsze zwróci uid albo zrobi rerun
     con = db_connect()
-    user = load_user(con, user_id)
+    prog = load_progress(con, uid)
 
     if "show_history" not in st.session_state:
         st.session_state.show_history = False
     if "selected_day" not in st.session_state:
         st.session_state.selected_day = 1
 
-    render_sidebar(con, user)
-
-    if not user.started:
-        render_start_screen(con, user)
-        con.close()
-        return
+    render_sidebar(con, uid)
 
     st.markdown('<div class="sdm-wrap">', unsafe_allow_html=True)
-    st.markdown(f"<div class='sdm-logo' style='font-size:44px;'>SeduceMe</div>", unsafe_allow_html=True)
-    st.markdown("<div class='sdm-subtitle'>Twoja 14-dniowa podróż — jedna karta dziennie, zapis postępu, dyskretnie</div>", unsafe_allow_html=True)
+    st.markdown("<div class='sdm-logo' style='font-size:44px;'>SeduceMe</div>", unsafe_allow_html=True)
+    st.markdown(
+        "<div class='sdm-subtitle'>Globalne odblokowanie od 1 stycznia 2026 — po dniu 14 wszystko odblokowane na stałe</div>",
+        unsafe_allow_html=True,
+    )
 
-    render_progress(user.start_date)
+    render_progress_bar()
 
     top1, top2, top3, top4 = st.columns([1, 1, 1, 1.4])
     with top1:
         if st.button("Dzisiaj", use_container_width=True):
-            st.session_state.selected_day = active_day(user.start_date)
+            d = active_day_global()
+            st.session_state.selected_day = 1 if d == 0 else d
             st.session_state.show_history = False
             st.rerun()
     with top2:
@@ -804,7 +684,7 @@ def main():
         st.markdown(
             f"""
             <div style="text-align:right; padding-top:10px; color:rgba(255,255,255,.65); font-size:14px;">
-              Ukończone: <b>{len(user.completed)}</b> / 14
+              Ukończone: <b>{len(prog.completed)}</b> / {TOTAL_DAYS}
             </div>
             """,
             unsafe_allow_html=True,
@@ -813,17 +693,15 @@ def main():
     st.write("")
 
     if st.session_state.show_history:
-        render_history(user)
+        render_history(uid, prog)
     else:
-        if st.session_state.selected_day is None:
-            st.session_state.selected_day = active_day(user.start_date)
-
         day = int(st.session_state.selected_day)
-        day = max(1, min(14, day))
-        render_day_card(con, user, day)
+        day = max(1, min(TOTAL_DAYS, day))
+        render_day_card(con, uid, prog, day)
 
     st.markdown("</div>", unsafe_allow_html=True)
     con.close()
+
 
 if __name__ == "__main__":
     main()
