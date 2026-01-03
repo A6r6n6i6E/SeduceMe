@@ -23,6 +23,8 @@ from zoneinfo import ZoneInfo
 
 import requests
 import streamlit as st
+import streamlit.components.v1 as components
+
 
 # =========================
 # KONFIG
@@ -361,15 +363,58 @@ def today_local() -> date:
 # UID (z URL)
 # =========================
 def ensure_uid() -> str:
-    uid = st.query_params.get("uid")
-    if uid:
-        st.session_state.user_id = uid
-        return uid
+    # 1) Jeśli już mamy w sesji, zwróć
+    if "user_id" in st.session_state and st.session_state.user_id:
+        return st.session_state.user_id
 
-    new_uid = str(uuid.uuid4())
-    st.query_params["uid"] = new_uid
-    st.session_state.user_id = new_uid
+    # 2) Jeśli uid jest w URL, użyj i (opcjonalnie) zapisz do localStorage
+    uid_from_url = st.query_params.get("uid")
+    if uid_from_url:
+        st.session_state.user_id = uid_from_url
+        # zapis do localStorage (żeby link bez uid też działał później)
+        components.html(
+            f"""
+            <script>
+              try {{ localStorage.setItem("seduceme_uid", "{uid_from_url}"); }} catch(e) {{}}
+            </script>
+            """,
+            height=0,
+        )
+        return uid_from_url
+
+    # 3) Jeśli nie ma w URL, spróbuj odczytać/zapisać w localStorage
+    uid = components.html(
+        """
+        <script>
+          (function () {
+            const KEY = "seduceme_uid";
+            let uid = null;
+            try {
+              uid = localStorage.getItem(KEY);
+              if (!uid) {
+                uid = (crypto.randomUUID ? crypto.randomUUID() :
+                  (Date.now().toString(36) + Math.random().toString(36).slice(2)));
+                localStorage.setItem(KEY, uid);
+              }
+            } catch (e) {
+              // localStorage zablokowany (rzadko) -> zrób jednorazowy uid
+              uid = (Date.now().toString(36) + Math.random().toString(36).slice(2));
+            }
+            document.write(uid);
+          })();
+        </script>
+        """,
+        height=0,
+    )
+
+    if not uid:
+        st.stop()
+
+    # 4) Zapisz w sesji, dopisz do URL jako fallback i zrerunuj
+    st.session_state.user_id = uid
+    st.query_params["uid"] = uid
     st.rerun()
+
 
 # =========================
 # Globalne odblokowanie
