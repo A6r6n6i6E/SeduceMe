@@ -1,11 +1,13 @@
 {
   "uid": "d_982f289dbbceb21a5c068ff3267ad229",
-  "updated_at": "2026-01-03T15:49:55.604708+01:00",
+  "updated_at": "2026-01-03T15:50:00.452213+01:00",
   "completed": [
     1,
     2
   ],
-  "favorites": [],
+  "favorites": [
+    3
+  ],
   "reactions": {},
   "schema_version": 1
 }
