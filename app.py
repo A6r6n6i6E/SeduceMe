@@ -756,13 +756,13 @@ def main():
     st.markdown('<div class="sdm-wrap">', unsafe_allow_html=True)
     st.markdown("<div class='sdm-logo' style='font-size:44px;'>SeduceMe</div>", unsafe_allow_html=True)
     st.markdown(
-        "<div class='sdm-subtitle'>Globalne odblokowanie od 1 stycznia 2026 — po dniu 14 wszystko odblokowane na stałe</div>",
+        "<div class='sdm-subtitle'> </div>",
         unsafe_allow_html=True,
     )
 
     render_progress_bar()
 
-    top1, top2, top4 = st.columns([1, 1, 1, 1.4])
+    top1, top2, top4 = st.columns([1, 1, 1.4])
     with top1:
         if st.button("Dzisiaj", use_container_width=True):
             d = active_day_global()
