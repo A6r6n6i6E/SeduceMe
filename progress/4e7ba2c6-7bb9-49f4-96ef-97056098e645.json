@@ -1,6 +1,6 @@
 {
   "uid": "4e7ba2c6-7bb9-49f4-96ef-97056098e645",
-  "updated_at": "2026-01-03T14:47:57.953411+01:00",
+  "updated_at": "2026-01-03T14:48:04.916413+01:00",
   "completed": [
     1,
     3
@@ -8,6 +8,8 @@
   "favorites": [
     3
   ],
-  "reactions": {},
+  "reactions": {
+    "3": "🍓"
+  },
   "schema_version": 1
 }
