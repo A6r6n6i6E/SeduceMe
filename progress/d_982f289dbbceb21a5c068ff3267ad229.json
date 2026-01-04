@@ -1,6 +1,6 @@
 {
   "uid": "d_982f289dbbceb21a5c068ff3267ad229",
-  "updated_at": "2026-01-04T09:01:04.250826+01:00",
+  "updated_at": "2026-01-04T09:01:07.330847+01:00",
   "completed": [
     1,
     2,
@@ -8,7 +8,8 @@
     4
   ],
   "favorites": [
-    3
+    3,
+    4
   ],
   "reactions": {},
   "schema_version": 1
